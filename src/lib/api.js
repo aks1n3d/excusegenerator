@@ -1,7 +1,13 @@
 /**
  * Frontend → Cloudflare Worker → Gemini.
- * In dev, Vite's proxy forwards `/api/*` → `http://localhost:8787`.
+ *
+ * Dev: VITE_API_BASE_URL is empty, so requests are relative ('/api/...')
+ *      and Vite's proxy forwards them to http://localhost:8787.
+ * Prod: VITE_API_BASE_URL is the deployed Worker's URL
+ *      (e.g. https://whoopsie-worker.your-account.workers.dev). Worker has CORS '*'.
  */
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || ''
 
 export class ExcuseError extends Error {
   constructor(code, message) {
@@ -13,7 +19,7 @@ export class ExcuseError extends Error {
 export async function generateExcuses({ situation, intensity, tone, locale, category }) {
   let resp
   try {
-    resp = await fetch('/api/generate', {
+    resp = await fetch(`${API_BASE}/api/generate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ situation, intensity, tone, locale, category }),
@@ -36,7 +42,7 @@ export async function generateExcuses({ situation, intensity, tone, locale, cate
 }
 
 export async function fetchDailyExcuse(locale) {
-  const resp = await fetch(`/api/daily?locale=${encodeURIComponent(locale)}`)
+  const resp = await fetch(`${API_BASE}/api/daily?locale=${encodeURIComponent(locale)}`)
   if (!resp.ok) throw new ExcuseError('daily_failed', `HTTP ${resp.status}`)
   return resp.json()
 }

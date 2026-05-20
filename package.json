@@ -9,7 +9,10 @@
     "dev:worker": "wrangler dev",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "deploy": "npm run deploy:worker && npm run deploy:frontend",
+    "deploy:worker": "wrangler deploy",
+    "deploy:frontend": "npm run build && npx firebase-tools@latest deploy --only hosting"
   },
   "dependencies": {
     "@sentry/react": "^10.53.1",

@@ -4,3 +4,12 @@ compatibility_date = "2025-05-01"
 
 [dev]
 port = 8787
+
+# Default deploy URL: https://whoopsie-worker.<your-account>.workers.dev
+# To put the Worker on a custom subdomain (requires the zone to be on Cloudflare DNS),
+# uncomment the block below and replace the pattern:
+#
+# [[routes]]
+# pattern = "whoopsie-api.aks1n3d.com/*"
+# zone_name = "aks1n3d.com"
+# custom_domain = true
