@@ -1,4 +1,4 @@
-name = "whoopsie-worker"
+name = "excusegenerator"
 main = "worker/index.js"
 compatibility_date = "2025-05-01"
 
