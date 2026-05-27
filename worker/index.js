@@ -42,19 +42,32 @@ const CATEGORY_CONTEXTS = {
   'gen-z-friends': 'a group chat of Gen-Z friends who will roast you mercilessly if the excuse is mid',
 }
 
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-  'Access-Control-Max-Age': '86400',
+// Locked-down CORS allow-list. Add any environment/preview origins here.
+const ALLOWED_ORIGINS = new Set([
+  'https://whoopsie.aks1n3d.com',
+  'http://localhost:5173', // Vite dev (proxy forwards browser Origin)
+])
+const DEFAULT_ORIGIN = 'https://whoopsie.aks1n3d.com'
+
+function corsHeaders(request) {
+  const origin = request?.headers?.get('Origin')
+  return {
+    'Access-Control-Allow-Origin':
+      origin && ALLOWED_ORIGINS.has(origin) ? origin : DEFAULT_ORIGIN,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Max-Age': '86400',
+    // Tell caches that the response depends on the Origin header.
+    Vary: 'Origin',
+  }
 }
 
-function json(data, init = {}) {
+function json(data, init = {}, request) {
   return new Response(JSON.stringify(data), {
     ...init,
     headers: {
       'Content-Type': 'application/json',
-      ...CORS_HEADERS,
+      ...corsHeaders(request),
       ...(init.headers || {}),
     },
   })
@@ -157,13 +170,13 @@ async function readGeminiExcuses(resp) {
 }
 
 async function handleGenerate(request, env) {
-  if (!env.GEMINI_API_KEY) return json({ error: 'missing_api_key' }, { status: 500 })
+  if (!env.GEMINI_API_KEY) return json({ error: 'missing_api_key' }, { status: 500 }, request)
 
   let body
   try {
     body = await request.json()
   } catch {
-    return json({ error: 'invalid_json' }, { status: 400 })
+    return json({ error: 'invalid_json' }, { status: 400 }, request)
   }
 
   const { situation, intensity, tone, locale, category } = body || {}
@@ -173,11 +186,11 @@ async function handleGenerate(request, env) {
     !TONE_INSTRUCTIONS[tone] ||
     !LOCALE_NAMES[locale]
   ) {
-    return json({ error: 'invalid_params' }, { status: 400 })
+    return json({ error: 'invalid_params' }, { status: 400 }, request)
   }
   // category is optional — only validate when present
   if (category && category !== 'none' && !CATEGORY_CONTEXTS[category]) {
-    return json({ error: 'invalid_category' }, { status: 400 })
+    return json({ error: 'invalid_category' }, { status: 400 }, request)
   }
   const effectiveCategory = category && category !== 'none' ? category : null
 
@@ -188,16 +201,16 @@ async function handleGenerate(request, env) {
     ;({ resp, model } = await callGemini({ apiKey: env.GEMINI_API_KEY, system, user }))
   } catch (err) {
     console.error('Gemini fetch failed:', err)
-    return json({ error: 'upstream_unreachable' }, { status: 502 })
+    return json({ error: 'upstream_unreachable' }, { status: 502 }, request)
   }
   if (!resp.ok) {
     const text = await resp.text().catch(() => '')
     console.error(`Gemini non-2xx via ${model}`, resp.status, text.slice(0, 500))
-    return json({ error: 'upstream_error', status: resp.status }, { status: 502 })
+    return json({ error: 'upstream_error', status: resp.status }, { status: 502 }, request)
   }
   const out = await readGeminiExcuses(resp)
-  if (out.error) return json(out, { status: 502 })
-  return json({ excuses: out.excuses })
+  if (out.error) return json(out, { status: 502 }, request)
+  return json({ excuses: out.excuses }, {}, request)
 }
 
 const SITUATION_KEYS = Object.keys(SITUATION_LABELS)
@@ -206,14 +219,22 @@ const TONE_KEYS = Object.keys(TONE_INSTRUCTIONS)
 async function handleDaily(request, env) {
   const url = new URL(request.url)
   const locale = url.searchParams.get('locale') || 'en'
-  if (!LOCALE_NAMES[locale]) return json({ error: 'invalid_locale' }, { status: 400 })
-  if (!env.GEMINI_API_KEY) return json({ error: 'missing_api_key' }, { status: 500 })
+  if (!LOCALE_NAMES[locale]) return json({ error: 'invalid_locale' }, { status: 400 }, request)
+  if (!env.GEMINI_API_KEY) return json({ error: 'missing_api_key' }, { status: 500 }, request)
 
   const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
   const cacheKey = new Request(`https://whoopsie-cache.local/daily/${today}/${locale}`)
   const cache = caches.default
+
+  // Cache stores the JSON body WITHOUT CORS headers — we re-apply CORS per request
+  // so a single cache entry serves prod + dev origins correctly.
   const cached = await cache.match(cacheKey)
-  if (cached) return cached
+  if (cached) {
+    const body = await cached.text()
+    return new Response(body, {
+      headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+    })
+  }
 
   // Deterministic pick by date so the entire planet sees the same combo today.
   const seed = parseInt(today.replace(/-/g, ''), 10)
@@ -227,12 +248,12 @@ async function handleDaily(request, env) {
   try {
     ;({ resp } = await callGemini({ apiKey: env.GEMINI_API_KEY, system, user }))
   } catch {
-    return json({ error: 'upstream_unreachable' }, { status: 502 })
+    return json({ error: 'upstream_unreachable' }, { status: 502 }, request)
   }
-  if (!resp.ok) return json({ error: 'upstream_error', status: resp.status }, { status: 502 })
+  if (!resp.ok) return json({ error: 'upstream_error', status: resp.status }, { status: 502 }, request)
 
   const out = await readGeminiExcuses(resp)
-  if (out.error) return json(out, { status: 502 })
+  if (out.error) return json(out, { status: 502 }, request)
 
   const body = JSON.stringify({
     excuse: out.excuses[0],
@@ -241,22 +262,26 @@ async function handleDaily(request, env) {
     tone,
     date: today,
   })
-  const finalResp = new Response(body, {
+
+  // Cacheable copy: no CORS headers, just the body + cache-control.
+  const cacheable = new Response(body, {
     headers: {
       'Content-Type': 'application/json',
-      // 24h edge cache. Cloudflare honors this with caches.default.put().
       'Cache-Control': 'public, max-age=86400',
-      ...CORS_HEADERS,
     },
   })
-  await cache.put(cacheKey, finalResp.clone())
-  return finalResp
+  await cache.put(cacheKey, cacheable)
+
+  // Served response: add per-request CORS.
+  return new Response(body, {
+    headers: { 'Content-Type': 'application/json', ...corsHeaders(request) },
+  })
 }
 
 export default {
   async fetch(request, env, ctx) {
     if (request.method === 'OPTIONS') {
-      return new Response(null, { headers: CORS_HEADERS })
+      return new Response(null, { headers: corsHeaders(request) })
     }
     const url = new URL(request.url)
     if (url.pathname === '/api/generate' && request.method === 'POST') {
@@ -265,6 +290,6 @@ export default {
     if (url.pathname === '/api/daily' && request.method === 'GET') {
       return handleDaily(request, env, ctx)
     }
-    return json({ error: 'not_found' }, { status: 404 })
+    return json({ error: 'not_found' }, { status: 404 }, request)
   },
 }

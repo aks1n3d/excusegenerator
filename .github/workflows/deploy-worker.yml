@@ -11,17 +11,22 @@ on:
       - '.github/workflows/deploy-worker.yml'
   workflow_dispatch:
 
+# Forces older JS actions (still on Node 20) to run on Node 24
+# until their maintainers ship Node-24-compatible releases.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
           cache: npm
 
       - run: npm ci
